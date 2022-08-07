@@ -18,7 +18,8 @@
 #define MOISTURE_MIN_VALUE        1550
 #define THRESHOLD_WET             50
 #define DEEP_SLEEP_DURATION_IN_S  5
-#define LOOP_INTERVAL_MIN_IN_MS   10000
+#define LOOP_INTERVAL_MIN_IN_MS   500
+#define MOISTURE_UPDATE_INTERVAL_IN_MS 10000
 
 // Network / HA / MQTT stuff
 #define HA_BROKER_ADDR        IPAddress(192,168,2,53)
@@ -28,6 +29,7 @@
 
 //Adafruit_INA219 ina219;
 unsigned long lastReadAt = millis();
+unsigned long last_moisture_update_at = millis() - MOISTURE_UPDATE_INTERVAL_IN_MS;
 WiFiClient client;
 HADevice device;
 HAMqtt mqtt(client, device);
@@ -37,9 +39,11 @@ HABinarySensor sensor_water_reservoir("water_reservoir", "power", false);  // TO
 HABinarySensor sensor_pump("pump", "power", false);
 //HABinarySensor *sensor_water_reservoir = NULL;
 HASensor sensor_moisture("moisture");
+HASwitch switch_force_pump_on("force_pump_on", false);
+HASwitch switch_force_pump_off("force_pump_off", false);
 
 enum enum_pump_states {PUMP_FORCE_ON, PUMP_AUTO, PUMP_FORCE_OFF};
-int pump_mode = PUMP_AUTO;
+enum_pump_states pump_mode = PUMP_AUTO;
 bool current_pump_state = LOW;
 
 bool water_level_ok(){
@@ -80,21 +84,77 @@ void turn_pump_off(bool initialize=false) {
   digitalWrite(PUMP_CONTROL_PIN, LOW);
 }
 
-int get_moisture_level() {
-  int sensor_value = 0;
-  int iteraions = 2;
-  for (size_t i = 0; i < iteraions; i++) {
-    sensor_value += analogRead(MOISTURE_SENSOR_PIN)/iteraions;
-    delay(25);
+enum_pump_states get_pump_mode() {
+  return pump_mode;
+}
+
+void set_pump_force_off(bool force_off) {
+  if (force_off) {
+    pump_mode = PUMP_FORCE_OFF;
+    turn_pump_off();
+    Serial.println("Pump mode set to FORCE_OFF.");
+  } else {
+    if (switch_force_pump_on.getState()) {
+      pump_mode = PUMP_FORCE_ON;
+      turn_pump_on();
+      Serial.println("Pump mode set to FORCE_ON. Force off disabled, but force on is enabled");
+    } else {
+      pump_mode = PUMP_AUTO;
+      Serial.println("Pump mode set to auto. Pump state should be updated during (next) loop");
+    }
   }
-  Serial.println(sensor_value);
-  //return sensor_value * 100 / MOISTURE_SCALING_FACTOR;
-  sensor_value -= MOISTURE_MIN_VALUE;
-  sensor_value *= 100;
-  sensor_value /= MOISTURE_MAX_VALUE - MOISTURE_MIN_VALUE;
-  //sensor_value = (sensor_value > 105 || sensor_value < -5) ? (-10) : sensor_value;
-  return 100 - sensor_value;
-  // TODO: out of range stuff (eg sensor disconnected)
+}
+
+void set_pump_force_on(bool force_on) {
+  if (force_on) {
+    if (switch_force_pump_off.getState()) {
+      Serial.println("Pump mode left as FORCE_OFF. Force off has higher priority than force on");
+    } else {
+      pump_mode = PUMP_FORCE_ON;
+      turn_pump_on();
+      Serial.println("Pump mode set to FORCE_ON");
+    }
+  } else {
+    if (pump_mode == PUMP_FORCE_OFF) {
+      Serial.println("Pump mode left at FORCE_OFF.");
+    } else {
+      pump_mode = PUMP_AUTO;
+      Serial.println("Pump mode set to auto. Pump state should be updated during (next) loop");
+    }
+  }
+}
+
+void onSwitchForcePumpOnStateChanged(bool state, HASwitch* s) {
+  set_pump_force_on(state);
+}
+
+void on_switch_force_pump_off_state_changed(bool state, HASwitch* s) {
+  set_pump_force_off(state);
+}
+
+
+int last_moisture_value = -9999;
+
+int get_moisture_level() {
+  if (last_moisture_value == -9999 || (millis() - last_moisture_update_at) >= MOISTURE_UPDATE_INTERVAL_IN_MS) {
+    last_moisture_update_at = millis();
+
+    int sensor_value = 0;
+    int iteraions = 2;
+    for (size_t i = 0; i < iteraions; i++) {
+      sensor_value += analogRead(MOISTURE_SENSOR_PIN)/iteraions;
+      delay(25);
+    }
+    Serial.println(sensor_value);
+    //return sensor_value * 100 / MOISTURE_SCALING_FACTOR;
+    sensor_value -= MOISTURE_MIN_VALUE;
+    sensor_value *= 100;
+    sensor_value /= MOISTURE_MAX_VALUE - MOISTURE_MIN_VALUE;
+    //sensor_value = (sensor_value > 105 || sensor_value < -5) ? (-10) : sensor_value;
+    last_moisture_value = 100 - sensor_value;
+    // TODO: out of range stuff (eg sensor disconnected)
+  } 
+  return last_moisture_value;
 }
 
 void setup() {
@@ -143,6 +203,12 @@ void setup() {
 //  sensor_moisture.setDeviceClass("None");
   sensor_moisture.setIcon("mdi:water");
   sensor_moisture.setName("Moisture");
+
+  switch_force_pump_on.onStateChanged(onSwitchForcePumpOnStateChanged);
+  switch_force_pump_on.setName("Force pump on");
+  switch_force_pump_off.onStateChanged(on_switch_force_pump_off_state_changed);
+  switch_force_pump_off.setName("Force pump off");
+
   // begin MQTT
   mqtt.begin(HA_BROKER_ADDR, HA_BROKER_PORT, HA_BROKER_USER, HA_BROKER_PW);
   mqtt.setDataPrefix(HA_BROKER_DATA_PREFIX);
