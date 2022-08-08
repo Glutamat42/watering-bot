@@ -3,29 +3,11 @@
 #include <ArduinoHA.h>
 //#include "Adafruit_INA219.h"  // also in platformio.ini
 #include "secrets.h"
+#include "actor_pump.h"
+#include "conf.h"
+#include "util.h"
 
-// pins
-#define I2C_SDA 21
-#define I2C_SCL 22
-#define MOISTURE_ENABLE_PIN 4
-#define PUMP_CONTROL_PIN 13
-#define MOISTURE_SENSOR_PIN 35
-#define WATER_LEVEL_SENSOR_PIN 14
 
-// moisture/water stuff
-#define MOISTURE_SCALING_FACTOR   4096  // set this to the resolution of the ADC; for esp32 the default value is 4096
-#define MOISTURE_MAX_VALUE        2150
-#define MOISTURE_MIN_VALUE        1550
-#define THRESHOLD_WET             50
-#define DEEP_SLEEP_DURATION_IN_S  5
-#define LOOP_INTERVAL_MIN_IN_MS   500
-#define MOISTURE_UPDATE_INTERVAL_IN_MS 10000
-
-// Network / HA / MQTT stuff
-#define HA_BROKER_ADDR        IPAddress(192,168,2,53)
-#define HA_BROKER_PORT        1883
-#define HA_DEVICE_NAME        "Watering bot"
-#define HA_BROKER_DATA_PREFIX "esp/watering_bot"
 
 //Adafruit_INA219 ina219;
 unsigned long lastReadAt = millis();
@@ -42,94 +24,15 @@ HASensor sensor_moisture("moisture");
 HASwitch switch_force_pump_on("force_pump_on", false);
 HASwitch switch_force_pump_off("force_pump_off", false);
 
-enum enum_pump_states {PUMP_FORCE_ON, PUMP_AUTO, PUMP_FORCE_OFF};
-enum_pump_states pump_mode = PUMP_AUTO;
-bool current_pump_state = LOW;
+ActorPump pump = ActorPump(&sensor_pump);
 
-bool water_level_ok(){
-  Serial.print("water level sensor: "); Serial.println(digitalRead(WATER_LEVEL_SENSOR_PIN));
-  return digitalRead(WATER_LEVEL_SENSOR_PIN) == LOW;
-}
-
-void turn_pump_on() {
-  if(pump_mode == PUMP_FORCE_OFF) {
-    Serial.println("Don't turn on pump, pump_mode is forced off");
-    return;
-  }
-
-  if(water_level_ok()) {
-    Serial.println("enable pump");
-    sensor_pump.setState(true);
-    current_pump_state = HIGH;
-    digitalWrite(PUMP_CONTROL_PIN, HIGH);
-  } else {
-    Serial.println("Don't turn on pump, water level is not ok");
-  }  
-}
-
-void turn_pump_off(bool initialize=false) {
-  if (!initialize){
-    if(pump_mode == PUMP_FORCE_ON && water_level_ok()) {
-      Serial.println("Don't turn off pump, pump_mode is forced on and water level is ok");
-      return;
-    }
-    if (pump_mode == PUMP_FORCE_ON) {
-      Serial.println("Pump is forced on, but water level is not ok");
-    }
-  }
-
-  Serial.println("disable pump");
-  sensor_pump.setState(false);
-  current_pump_state = LOW;
-  digitalWrite(PUMP_CONTROL_PIN, LOW);
-}
-
-enum_pump_states get_pump_mode() {
-  return pump_mode;
-}
-
-void set_pump_force_off(bool force_off) {
-  if (force_off) {
-    pump_mode = PUMP_FORCE_OFF;
-    turn_pump_off();
-    Serial.println("Pump mode set to FORCE_OFF.");
-  } else {
-    if (switch_force_pump_on.getState()) {
-      pump_mode = PUMP_FORCE_ON;
-      turn_pump_on();
-      Serial.println("Pump mode set to FORCE_ON. Force off disabled, but force on is enabled");
-    } else {
-      pump_mode = PUMP_AUTO;
-      Serial.println("Pump mode set to auto. Pump state should be updated during (next) loop");
-    }
-  }
-}
-
-void set_pump_force_on(bool force_on) {
-  if (force_on) {
-    if (switch_force_pump_off.getState()) {
-      Serial.println("Pump mode left as FORCE_OFF. Force off has higher priority than force on");
-    } else {
-      pump_mode = PUMP_FORCE_ON;
-      turn_pump_on();
-      Serial.println("Pump mode set to FORCE_ON");
-    }
-  } else {
-    if (pump_mode == PUMP_FORCE_OFF) {
-      Serial.println("Pump mode left at FORCE_OFF.");
-    } else {
-      pump_mode = PUMP_AUTO;
-      Serial.println("Pump mode set to auto. Pump state should be updated during (next) loop");
-    }
-  }
-}
 
 void onSwitchForcePumpOnStateChanged(bool state, HASwitch* s) {
-  set_pump_force_on(state);
+  pump.set_pump_force_on(state, &switch_force_pump_off);
 }
 
 void on_switch_force_pump_off_state_changed(bool state, HASwitch* s) {
-  set_pump_force_off(state);
+  pump.set_pump_force_off(state, &switch_force_pump_on);
 }
 
 
@@ -167,7 +70,8 @@ void setup() {
   pinMode(WATER_LEVEL_SENSOR_PIN, INPUT);
 
   digitalWrite(MOISTURE_ENABLE_PIN, HIGH);  // can be high the whole time the esp is turned on. Either sensor or pump will be active
-  turn_pump_off(true);
+  pump.turn_pump_off(true);
+
   
 
   // WiFi and HA
@@ -249,7 +153,7 @@ void loop() {
   digitalWrite(PUMP_CONTROL_PIN, LOW);  // turn pump off because pump caused voltage drop -> moisture reading were garbage
   delay(100);
   int sensor_value = get_moisture_level();
-  digitalWrite(PUMP_CONTROL_PIN, current_pump_state);
+  digitalWrite(PUMP_CONTROL_PIN, pump.get_current_pump_state());
   Serial.print("moisture level: ");
   Serial.println(sensor_value);
   sensor_moisture.setValue(sensor_value);
@@ -269,9 +173,9 @@ void loop() {
     */
 
     
-    turn_pump_on();
+    pump.turn_pump_on();
   } else {
-    turn_pump_off();
+    pump.turn_pump_off();
 
     /**
     mqtt.disconnect();
