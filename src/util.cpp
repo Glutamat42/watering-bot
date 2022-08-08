@@ -18,6 +18,7 @@ bool check_wifi_connection() {
       } else {
         Serial.println("WiFi reconnected");
         Serial.println(WiFi.localIP());
+        //delay(250);
         return true;
       }
     }

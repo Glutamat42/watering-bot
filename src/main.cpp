@@ -63,6 +63,7 @@ int get_moisture_level() {
 
 void setup() {
   Serial.begin(9600);
+  Serial.println("Device is starting");
 
   // setup GPIOs
   pinMode(MOISTURE_ENABLE_PIN, OUTPUT);
@@ -74,7 +75,7 @@ void setup() {
   digitalWrite(MOISTURE_ENABLE_PIN, HIGH);  // can be high the whole time the esp is turned on. Either sensor or pump will be active
   pump.turn_pump_off(true);
 
-  std::tuple<bool, int> battery_level = read_battery_level(&pump);
+  std::tuple<bool, float> battery_level = read_battery_level(&pump);
   last_read_battery_level = millis();
   Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
 
@@ -98,7 +99,7 @@ void setup() {
   sensor_moisture.setIcon("mdi:water");
   sensor_moisture.setName("Moisture");
 
-  //sensor_battery.setUnitOfMeasurement("%");
+  sensor_battery.setUnitOfMeasurement("V");
   sensor_battery.setName("Battery level");
   sensor_battery.setIcon("mdi:battery");
 
@@ -111,27 +112,27 @@ void setup() {
   mqtt.begin(HA_BROKER_ADDR, HA_BROKER_PORT, HA_BROKER_USER, HA_BROKER_PW);
   mqtt.setDataPrefix(HA_BROKER_DATA_PREFIX);
 
-  if (std::get<1>(battery_level)) {
+  if (std::get<0>(battery_level)) {
     sensor_battery.setValue(std::get<1>(battery_level));
   }
-  sensor_battery.setAvailability(std::get<1>(battery_level));
+  sensor_battery.setAvailability(std::get<0>(battery_level));
 }
 
 
 void loop() {
   if (last_read_battery_level + BATTERY_LEVEL_UPDATE_INTERVAL_IN_MS < millis()) {
     Serial.println("update battery level");
-    std::tuple<bool, int> battery_level = read_battery_level(&pump, true);
+    std::tuple<bool, float> battery_level = read_battery_level(&pump, true);
     last_read_battery_level = millis();
-    Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
-    if (std::get<1>(battery_level)) {
+    //Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
+    if (std::get<0>(battery_level)) {
       sensor_battery.setValue(std::get<1>(battery_level));
     }
-    sensor_battery.setAvailability(std::get<1>(battery_level));
+    sensor_battery.setAvailability(std::get<0>(battery_level));
+
   } else {
     check_wifi_connection();
   }
-
 
 
   mqtt.loop();

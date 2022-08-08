@@ -12,6 +12,6 @@
  * @param disable_and_restart_wifi 
  * @return std::tuple<bool, int> bool: false if reading was (obviously) not successful; int: sensor value
  */
-std::tuple<bool, int> read_battery_level(ActorPump* pump, bool disable_and_restart_wifi=false);
+std::tuple<bool, float> read_battery_level(ActorPump* pump, bool disable_and_restart_wifi=false);
 
 #endif
