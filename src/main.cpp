@@ -6,12 +6,13 @@
 #include "actor_pump.h"
 #include "conf.h"
 #include "util.h"
-
+#include "sensor_battery_level.h"
 
 
 //Adafruit_INA219 ina219;
 unsigned long lastReadAt = millis();
-unsigned long last_moisture_update_at = millis() - MOISTURE_UPDATE_INTERVAL_IN_MS;
+unsigned long last_moisture_update_at = 0;
+unsigned long last_read_battery_level = 0;
 WiFiClient client;
 HADevice device;
 HAMqtt mqtt(client, device);
@@ -19,7 +20,7 @@ HAMqtt mqtt(client, device);
 //HABinarySensor sensor_pump("pump", "power", false);
 HABinarySensor sensor_water_reservoir("water_reservoir", "power", false);  // TODO: This sets this sensor to false at boot, until the first update is performed
 HABinarySensor sensor_pump("pump", "power", false);
-//HABinarySensor *sensor_water_reservoir = NULL;
+HASensor sensor_battery("battery");
 HASensor sensor_moisture("moisture");
 HASwitch switch_force_pump_on("force_pump_on", false);
 HASwitch switch_force_pump_off("force_pump_off", false);
@@ -39,7 +40,7 @@ void on_switch_force_pump_off_state_changed(bool state, HASwitch* s) {
 int last_moisture_value = -9999;
 
 int get_moisture_level() {
-  if (last_moisture_value == -9999 || (millis() - last_moisture_update_at) >= MOISTURE_UPDATE_INTERVAL_IN_MS) {
+  if (last_moisture_update_at == 0 || (millis() - last_moisture_update_at) >= MOISTURE_UPDATE_INTERVAL_IN_MS) {
     last_moisture_update_at = millis();
 
     int sensor_value = 0;
@@ -68,11 +69,14 @@ void setup() {
   pinMode(PUMP_CONTROL_PIN, OUTPUT);
   pinMode(MOISTURE_SENSOR_PIN, INPUT);
   pinMode(WATER_LEVEL_SENSOR_PIN, INPUT);
+  pinMode(BATTERY_LEVEL_PIN, INPUT);
 
   digitalWrite(MOISTURE_ENABLE_PIN, HIGH);  // can be high the whole time the esp is turned on. Either sensor or pump will be active
   pump.turn_pump_off(true);
 
-  
+  std::tuple<bool, int> battery_level = read_battery_level(&pump);
+  last_read_battery_level = millis();
+  Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
 
   // WiFi and HA
   // Unique ID must be set!
@@ -80,22 +84,8 @@ void setup() {
   WiFi.macAddress(mac);
   device.setUniqueId(mac, sizeof(mac));
   // connect
-  WiFi.begin(WIFI_SSID, WIFI_PW);
-  Serial.println(WIFI_SSID);
-  Serial.println(WIFI_PW);
+  check_wifi_connection();
 
-  for (size_t i = 0; i < 10; i++) {
-    int wifi_status = WiFi.status();
-    if (wifi_status != WL_CONNECTED) {
-      Serial.print("WiFi not connected: ");
-      Serial.println(wifi_status);
-      delay(250);
-    } else {
-      Serial.println("WiFi connected");
-      Serial.println(WiFi.localIP());
-      break;
-    }
-  }
   // set device's details (optional)
   device.setName(HA_DEVICE_NAME);
   device.setSoftwareVersion("0.0.2");
@@ -108,6 +98,10 @@ void setup() {
   sensor_moisture.setIcon("mdi:water");
   sensor_moisture.setName("Moisture");
 
+  //sensor_battery.setUnitOfMeasurement("%");
+  sensor_battery.setName("Battery level");
+  sensor_battery.setIcon("mdi:battery");
+
   switch_force_pump_on.onStateChanged(onSwitchForcePumpOnStateChanged);
   switch_force_pump_on.setName("Force pump on");
   switch_force_pump_off.onStateChanged(on_switch_force_pump_off_state_changed);
@@ -117,32 +111,25 @@ void setup() {
   mqtt.begin(HA_BROKER_ADDR, HA_BROKER_PORT, HA_BROKER_USER, HA_BROKER_PW);
   mqtt.setDataPrefix(HA_BROKER_DATA_PREFIX);
 
-
-/**
-  if (! ina219.begin()) {
-    Serial.println("Failed to find INA219 chip");
-    while (1) { delay(10); }
+  if (std::get<1>(battery_level)) {
+    sensor_battery.setValue(std::get<1>(battery_level));
   }
-  */
+  sensor_battery.setAvailability(std::get<1>(battery_level));
 }
 
 
 void loop() {
-  int wifi_status = WiFi.status();
-  if (wifi_status != WL_CONNECTED) {
-    Serial.print("wifi connection problem, status: "); Serial.println(wifi_status);
-    WiFi.begin(WIFI_SSID, WIFI_PW);
-
-    for (size_t i = 0; i < 10; i++) {
-      wifi_status = WiFi.status();
-      if (wifi_status != WL_CONNECTED) {
-        delay(250);
-      } else {
-        Serial.println("WiFi reconnected");
-        Serial.println(WiFi.localIP());
-        break;
-      }
+  if (last_read_battery_level + BATTERY_LEVEL_UPDATE_INTERVAL_IN_MS < millis()) {
+    Serial.println("update battery level");
+    std::tuple<bool, int> battery_level = read_battery_level(&pump, true);
+    last_read_battery_level = millis();
+    Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
+    if (std::get<1>(battery_level)) {
+      sensor_battery.setValue(std::get<1>(battery_level));
     }
+    sensor_battery.setAvailability(std::get<1>(battery_level));
+  } else {
+    check_wifi_connection();
   }
 
 
@@ -150,10 +137,10 @@ void loop() {
   mqtt.loop();
 
 
-  digitalWrite(PUMP_CONTROL_PIN, LOW);  // turn pump off because pump caused voltage drop -> moisture reading were garbage
-  delay(100);
+  pump.temporarily_force_pump_off();  // turn pump off because pump caused voltage drop -> moisture reading were garbage
   int sensor_value = get_moisture_level();
-  digitalWrite(PUMP_CONTROL_PIN, pump.get_current_pump_state());
+  pump.resume_temporarily_forced_off();
+
   Serial.print("moisture level: ");
   Serial.println(sensor_value);
   sensor_moisture.setValue(sensor_value);
@@ -163,29 +150,10 @@ void loop() {
   sensor_water_reservoir.setState(water_available);
   // TODO: log water_available
 
-  if(sensor_value < THRESHOLD_WET && water_available) {
-    /**
-    float shuntvoltage = ina219.getShuntVoltage_mV();
-    float busvoltage = ina219.getBusVoltage_V();
-    float current_mA = ina219.getCurrent_mA();
-    float power_mW = ina219.getPower_mW();
-    float loadvoltage = busvoltage + (shuntvoltage / 1000);
-    */
-
-    
+  if(sensor_value < THRESHOLD_WET && water_available) {    
     pump.turn_pump_on();
   } else {
     pump.turn_pump_off();
-
-    /**
-    mqtt.disconnect();
-    digitalWrite(MOISTURE_ENABLE_PIN, LOW);
-
-    Serial.println("go to sleep");
-    esp_sleep_enable_timer_wakeup(DEEP_SLEEP_DURATION_IN_S * 1000 * 1000);
-    Serial.flush(); 
-    esp_deep_sleep_start();
-    */
   }
 
   // delay

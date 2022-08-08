@@ -80,3 +80,12 @@ void ActorPump::set_pump_force_on(bool force_on, HASwitch* switch_force_pump_off
     }
   }
 }
+
+void ActorPump::temporarily_force_pump_off() {
+  digitalWrite(PUMP_CONTROL_PIN, LOW);
+  delay(25);
+}
+
+void ActorPump::resume_temporarily_forced_off() {
+  digitalWrite(PUMP_CONTROL_PIN, this->current_pump_state);
+}

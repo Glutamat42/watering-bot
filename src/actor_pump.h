@@ -22,6 +22,12 @@ class ActorPump {
         void set_pump_force_off(bool force_off, HASwitch* switch_force_pump_on);
         void set_pump_force_on(bool force_on, HASwitch* switch_force_pump_off);
 
+        /** This funciton will turn off the pump, independently of any other logic.
+         * It is intended to reduce power consumption to stabilize sensor readings.
+         * Only use this for such purpouses and run `resume_temporarily_forced_off()` directly after.
+         */
+        void temporarily_force_pump_off();
+        void resume_temporarily_forced_off();
 };
 
 #endif
