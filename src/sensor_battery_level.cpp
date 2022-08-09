@@ -15,16 +15,29 @@ std::tuple<bool, float> read_battery_level(ActorPump* pump, bool disable_and_res
     check_wifi_connection();
   }
 
-  Serial.print("raw value: "); Serial.println(battery_raw_value);
-  battery_raw_value = battery_raw_value * 2 / 4095 * 3.3;
+  //Serial.print("raw value: "); Serial.println(battery_raw_value);
+  battery_raw_value = battery_raw_value / 4095 * 3.3 * 2.17;
+  battery_raw_value = round(battery_raw_value * 10.0) / 10.0;
 
-  if (battery_raw_value == 0 || battery_raw_value > 4.5) {
+  if (battery_raw_value < 2 || battery_raw_value > 5) {
     return {false, battery_raw_value};
   }
   return {true, battery_raw_value};
 
   /** sensor reading | voltage
    * 2303 3,91V
+   * 
+   * 
+   * 2130/2200 3,85V
+   * 2100 3,67V
+   * 1920 3,64V
+   * 1900/1950 3,45V
+   * 1635 3,05V (cut off, Spannung ungenau)
+   * 
+   * 
+   * charging
+   * 2255 3,94
+   * 2270 3,83V
    * 
    */
 }
