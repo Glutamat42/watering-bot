@@ -7,11 +7,13 @@
 #include "conf.h"
 #include "util.h"
 #include "sensor_battery_level.h"
+#include "datastructures.h"
+#include "sensor_moisture.h"
 
 
 //Adafruit_INA219 ina219;
+unsigned long started_watering_at;
 unsigned long lastReadAt = millis();
-unsigned long last_moisture_update_at = 0;
 unsigned long last_read_battery_level = 0;
 WiFiClient client;
 HADevice device;
@@ -20,8 +22,8 @@ HAMqtt mqtt(client, device);
 //HABinarySensor sensor_pump("pump", "power", false);
 HABinarySensor sensor_water_reservoir("water_reservoir", "power", false);  // TODO: This sets this sensor to false at boot, until the first update is performed
 HABinarySensor sensor_pump("pump", "power", false);
-HASensor sensor_battery("battery");
 HASensor sensor_moisture("moisture");
+HASensor sensor_battery("battery");
 HASwitch switch_force_pump_on("force_pump_on", false);
 HASwitch switch_force_pump_off("force_pump_off", false);
 
@@ -36,30 +38,6 @@ void on_switch_force_pump_off_state_changed(bool state, HASwitch* s) {
   pump.set_pump_force_off(state, &switch_force_pump_on);
 }
 
-
-int last_moisture_value = -9999;
-
-std::tuple<bool, int> get_moisture_level() {
-  if (last_moisture_update_at == 0 || (millis() - last_moisture_update_at) >= MOISTURE_UPDATE_INTERVAL_IN_MS) {
-    last_moisture_update_at = millis();
-
-    int sensor_value = 0;
-    int iteraions = 2;
-    for (size_t i = 0; i < iteraions; i++) {
-      sensor_value += analogRead(MOISTURE_SENSOR_PIN)/iteraions;
-      delay(25);
-    }
-    Serial.println(sensor_value);
-    //return sensor_value * 100 / MOISTURE_SCALING_FACTOR;
-    sensor_value -= MOISTURE_MIN_VALUE;
-    sensor_value *= 100;
-    sensor_value /= MOISTURE_MAX_VALUE - MOISTURE_MIN_VALUE;
-    //sensor_value = (sensor_value > 105 || sensor_value < -5) ? (-10) : sensor_value;
-    last_moisture_value = 100 - sensor_value;
-    // TODO: out of range stuff (eg sensor disconnected)
-  } 
-  return {last_moisture_value < 105 && last_moisture_value > -5, last_moisture_value};
-}
 
 void setup() {
   Serial.begin(9600);
@@ -94,10 +72,12 @@ void setup() {
 //  sensor_moisture.setDeviceClass("None");
   sensor_moisture.setIcon("mdi:water");
   sensor_moisture.setName("Moisture");
+  sensor_moisture.setAvailability(false);
   
   sensor_battery.setUnitOfMeasurement("V");
   sensor_battery.setName("Battery level");
   sensor_battery.setIcon("mdi:battery");
+  sensor_battery.setAvailability(false);
 
   switch_force_pump_on.onStateChanged(onSwitchForcePumpOnStateChanged);
   switch_force_pump_on.setName("Force pump on");
@@ -118,7 +98,7 @@ void loop() {
     Serial.println("update battery level");
     std::tuple<bool, float> battery_level = read_battery_level(&pump, true);
     last_read_battery_level = millis();
-    //Serial.print("Battery level: "); Serial.println(std::get<1>(battery_level));
+    Serial.print("Battery level ("); Serial.print(std::get<0>(battery_level)); Serial.print("): "); Serial.println(std::get<1>(battery_level));
     if (std::get<0>(battery_level)) {
       sensor_battery.setValue(std::get<1>(battery_level));
     }
@@ -128,27 +108,43 @@ void loop() {
     check_wifi_connection();
   }
 
+  std::tuple<bool, int, bool> moisture_sensor_value = get_moisture_level(&pump);
 
-
-
-  pump.temporarily_force_pump_off();  // turn pump off because pump caused voltage drop -> moisture reading were garbage
-  std::tuple<bool, int> moisture_sensor_value = get_moisture_level();
-  pump.resume_temporarily_forced_off();
-
-  Serial.print("moisture (");  Serial.print(std::get<0>(moisture_sensor_value)); Serial.print("): "); Serial.println(std::get<1>(moisture_sensor_value));
-  if (std::get<0>(moisture_sensor_value)){
-    sensor_moisture.setValue(std::get<1>(moisture_sensor_value));
+  if (std::get<2>(moisture_sensor_value)) {
+    Serial.print("moisture (");  Serial.print(std::get<0>(moisture_sensor_value)); Serial.print("): "); Serial.println(std::get<1>(moisture_sensor_value));
+    if (std::get<0>(moisture_sensor_value)){
+      sensor_moisture.setValue(std::get<1>(moisture_sensor_value));
+    }
+    sensor_moisture.setAvailability(std::get<0>(moisture_sensor_value));
   }
-  sensor_moisture.setAvailability(std::get<0>(moisture_sensor_value));
 
   bool water_available = water_level_ok();
   Serial.print("water_available: "); Serial.println(water_available);
   sensor_water_reservoir.setState(water_available);
 
+  bool go_to_deepsleep = false;
   if(std::get<0>(moisture_sensor_value) && std::get<1>(moisture_sensor_value) < THRESHOLD_WET && water_available) {    
-    pump.turn_pump_on();
+    if (pump.get_current_pump_state() == HIGH) {
+      if (started_watering_at + MAX_WATERING_DURATION_IN_MS < millis()) {
+        go_to_deepsleep = true;
+      }
+    } else {
+      started_watering_at = millis();
+      pump.turn_pump_on();
+    }
   } else {
+    go_to_deepsleep = true;
+  }
+  
+  if (go_to_deepsleep) {
     pump.turn_pump_off();
+
+    mqtt.disconnect();
+    digitalWrite(MOISTURE_ENABLE_PIN, LOW);
+    Serial.println("go to sleep");
+    esp_sleep_enable_timer_wakeup(DEEP_SLEEP_DURATION_IN_S * 1000 * 1000);
+    Serial.flush(); 
+    esp_deep_sleep_start();
   }
 
   // delay

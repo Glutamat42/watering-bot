@@ -28,4 +28,3 @@ bool check_wifi_connection() {
   Serial.println("failed to reconnect to wifi");
   return false;
 }
-

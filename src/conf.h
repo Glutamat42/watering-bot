@@ -11,14 +11,15 @@
 #define BATTERY_LEVEL_PIN 36
 
 // moisture/water stuff
-#define MOISTURE_SCALING_FACTOR   4096  // set this to the resolution of the ADC; for esp32 the default value is 4096
-#define MOISTURE_MAX_VALUE        2150
-#define MOISTURE_MIN_VALUE        1550
-#define THRESHOLD_WET             50
-#define DEEP_SLEEP_DURATION_IN_S  5
-#define LOOP_INTERVAL_MIN_IN_MS   1000
-#define MOISTURE_UPDATE_INTERVAL_IN_MS 10000
+#define MOISTURE_SCALING_FACTOR             4096  // set this to the resolution of the ADC; for esp32 the default value is 4096
+#define MOISTURE_MAX_VALUE                  2150
+#define MOISTURE_MIN_VALUE                  1550
+#define THRESHOLD_WET                       22
+#define DEEP_SLEEP_DURATION_IN_S            30 * 60
+#define LOOP_INTERVAL_MIN_IN_MS             1000
+#define MOISTURE_UPDATE_INTERVAL_IN_MS      10000
 #define BATTERY_LEVEL_UPDATE_INTERVAL_IN_MS 10000
+#define MAX_WATERING_DURATION_IN_MS         5 * 60 * 1000
 
 // Network / HA / MQTT stuff
 #define HA_BROKER_ADDR        IPAddress(192,168,2,53)
