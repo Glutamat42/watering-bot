@@ -123,26 +123,30 @@ void loop() {
   sensor_water_reservoir.setState(water_available);
 
   bool go_to_deepsleep = false;
-  if(std::get<0>(moisture_sensor_value) && std::get<1>(moisture_sensor_value) < THRESHOLD_WET && water_available) {    
+  if(std::get<0>(moisture_sensor_value) && std::get<1>(moisture_sensor_value) < THRESHOLD_WET && water_available) { 
+    Serial.println("Moisture sensor read successfull and value is below threshold")   ;
     if (pump.get_current_pump_state() == HIGH) {
+      Serial.println("Pump already HIGH");
       if (started_watering_at + MAX_WATERING_DURATION_IN_MS < millis()) {
+        Serial.println("Pump time limit reached");
         go_to_deepsleep = true;
       }
     } else {
+      Serial.println("Pump is LOW, turn on");
       started_watering_at = millis();
       pump.turn_pump_on();
     }
   } else {
     go_to_deepsleep = true;
   }
-  
+
   if (go_to_deepsleep) {
     pump.turn_pump_off();
 
     mqtt.disconnect();
     digitalWrite(MOISTURE_ENABLE_PIN, LOW);
     Serial.println("go to sleep");
-    esp_sleep_enable_timer_wakeup(DEEP_SLEEP_DURATION_IN_S * 1000 * 1000);
+    esp_sleep_enable_timer_wakeup( (uint64_t) DEEP_SLEEP_DURATION_IN_S * 1000 * 1000);
     Serial.flush(); 
     esp_deep_sleep_start();
   }

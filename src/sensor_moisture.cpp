@@ -12,7 +12,7 @@ std::tuple<bool, int, bool> get_moisture_level(ActorPump* pump) {
     last_moisture_update_at = millis();
     updated = true;
 
-    int iterations = moisture_measurement.get_moving_average_initialized() ? 3 : 25;
+    int iterations = moisture_measurement.get_moving_average_initialized() ? 3 : 30;
     pump->temporarily_force_pump_off();  // turn pump off because pump caused voltage drop -> moisture reading were garbage
     for (size_t i = 0; i < iterations; i++) {
       sensor_value += analogRead(MOISTURE_SENSOR_PIN);
@@ -23,9 +23,9 @@ std::tuple<bool, int, bool> get_moisture_level(ActorPump* pump) {
     sensor_value /= iterations;
     pump->resume_temporarily_forced_off();
     //Serial.println(sensor_value);
-    sensor_value = moisture_measurement.set_value(sensor_value);
+    sensor_value = round(moisture_measurement.set_value(sensor_value));
   } else {
-    sensor_value = moisture_measurement.get_value();
+    sensor_value = round(moisture_measurement.get_value());
   }
 
   sensor_value -= MOISTURE_MIN_VALUE;
